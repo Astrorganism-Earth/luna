@@ -1,109 +1,138 @@
 import React, { Suspense } from 'react';
-import { BrowserRouter as Router, Route, Routes, Link, Navigate } from 'react-router-dom';
-import styled from 'styled-components';
-import { useAuth } from './context/AuthContext';
+import { BrowserRouter as Router, Routes, Route, Navigate, Link } from 'react-router-dom';
+import styled, { ThemeProvider } from 'styled-components';
+import { theme } from './styles/theme';
+import { GlobalStyle } from './styles/GlobalStyle';
+import { AuthSubscriptionProvider, useAuthSubscription } from './context/AuthSubscriptionContext';
 
-// Lazy load pages for better performance
+// Lazy load pages
 const LoginPage = React.lazy(() => import('./pages/LoginPage'));
-const RegisterPage = React.lazy(() => import('./pages/RegisterPage')); // Import RegisterPage
+const RegisterPage = React.lazy(() => import('./pages/RegisterPage')); 
 const ChatPage = React.lazy(() => import('./pages/ChatPage'));
 const SubscriptionPage = React.lazy(() => import('./pages/SubscriptionPage'));
-const LoginCallbackPage = React.lazy(() => import('./pages/LoginCallbackPage')); // Import LoginCallbackPage
+const LoginCallbackPage = React.lazy(() => import('./pages/LoginCallbackPage')); 
+const PaymentSuccessPage = React.lazy(() => import('./pages/PaymentSuccessPage')); 
 
 // Basic styled layout container
 const AppContainer = styled.div`
-  min-height: 100vh;
   display: flex;
   flex-direction: column;
+  min-height: 100vh;
 `;
 
 const Header = styled.header`
-  padding: ${({ theme }) => theme.spacing.medium};
-  background-color: ${({ theme }) => theme.colors.secondary};
-  color: #fff;
+  background-color: #333; 
+  color: white;
+  padding: 1rem 2rem;
 
   nav ul {
     list-style: none;
     padding: 0;
+    margin: 0;
     display: flex;
-    gap: ${({ theme }) => theme.spacing.medium};
+    gap: 1rem;
   }
 
   nav a {
-    color: #fff;
-    font-weight: bold;
+    color: white;
+    text-decoration: none;
     &:hover {
-      color: ${({ theme }) => theme.colors.accent};
+      text-decoration: underline;
     }
   }
 `;
 
 const MainContent = styled.main`
   flex-grow: 1;
-  padding: ${({ theme }) => theme.spacing.large};
+  padding: 1rem; 
 `;
 
 const Footer = styled.footer`
+  background-color: #333; 
+  color: #ccc;
   text-align: center;
-  padding: ${({ theme }) => theme.spacing.medium};
-  margin-top: auto; // Push footer to the bottom
-  font-size: 0.9em;
-  color: ${({ theme }) => theme.colors.text}99; // Slightly faded text
+  padding: 1rem;
+  margin-top: auto; 
 `;
 
-// Simple loading fallback
-const LoadingFallback = () => <div>Loading...</div>; // Replace with a nicer loading component later
+const AppContent: React.FC = () => {
+  const { currentUser, stripeRole, loading } = useAuthSubscription();
 
-function App() {
-  const { currentUser, loading } = useAuth();
-
-  // Show loading indicator while checking auth state
   if (loading) {
-    return <LoadingFallback />; 
+    return <div>Loading Luna Core...</div>;
   }
 
   return (
-    <Router>
-      <AppContainer>
-        <Header>
-          <nav>
-            <ul>
-              <li><Link to="/">Home (Chat)</Link></li>
-              <li><Link to="/login">Login</Link></li>
-              <li><Link to="/register">Register</Link></li>
-              <li><Link to="/subscription">Subscription</Link></li>
-              {/* Add Language Toggle Here */}
-            </ul>
-          </nav>
-        </Header>
+    <ThemeProvider theme={theme}> 
+      <GlobalStyle />
+      <Router>
+        <Suspense fallback={<div>Loading Page...</div>}> 
+          <AppContainer>
+            <Header>
+              <nav>
+                <ul>
+                  {currentUser && <li><Link to="/chat">Chat</Link></li>}
+                  {currentUser && <li><Link to="/subscription">Donate</Link></li>}
+                  {!currentUser && <li><Link to="/login">Login</Link></li>}
+                  {!currentUser && <li><Link to="/register">Register</Link></li>}
+                </ul>
+              </nav>
+            </Header>
 
-        <MainContent>
-          <Suspense fallback={<LoadingFallback />}>
-            <Routes>
-              {/* Redirect root based on auth state */}
-              <Route path="/" element={currentUser ? <Navigate to="/chat" /> : <Navigate to="/register" />} />
-              
-              {/* Public Routes (accessible when not logged in) */}
-              <Route path="/login" element={!currentUser ? <LoginPage /> : <Navigate to="/chat" />} />
-              <Route path="/register" element={!currentUser ? <RegisterPage /> : <Navigate to="/chat" />} /> 
-              <Route path="/login/callback" element={<LoginCallbackPage />} /> {/* Add route for callback */}
+            <MainContent>
+              <Routes>
+                {/* Public routes */}
+                <Route path="/login" element={!currentUser ? <LoginPage /> : (stripeRole === 'active' ? <Navigate to="/chat" replace /> : <Navigate to="/subscribe" replace />)} />
+                <Route path="/register" element={!currentUser ? <RegisterPage /> : (stripeRole === 'active' ? <Navigate to="/chat" replace /> : <Navigate to="/subscribe" replace />)} />
+                <Route path="/login/callback" element={<LoginCallbackPage />} />
 
-              {/* Protected Routes (require login) */}
-              <Route path="/subscription" element={currentUser ? <SubscriptionPage /> : <Navigate to="/login" />} />
-              <Route path="/chat" element={currentUser ? <ChatPage /> : <Navigate to="/login" />} /> 
-              
-              {/* Add a 404 Not Found route? */}
-              {/* <Route path="*" element={<NotFoundPage />} /> */}
-            </Routes>
-          </Suspense>
-        </MainContent>
+                {/* Protected Routes - require login */}
+                <Route path="/subscription" element={currentUser ? <SubscriptionPage /> : <Navigate to="/login" />} /> 
+                <Route path="/payment-success" element={currentUser ? <PaymentSuccessPage /> : <Navigate to="/login" />} />
+                
+                {/* Protected Route - requires login AND active subscription */}
+                <Route
+                  path="/chat"
+                  element={
+                    currentUser && stripeRole === 'active' ? (
+                      <ChatPage />
+                    ) : (
+                      // If logged in but no role, redirect to subscribe, else to login
+                      currentUser ? <Navigate to="/subscribe" replace /> : <Navigate to="/login" replace />
+                    )
+                  }
+                />
 
-        <Footer>
-          &copy; {new Date().getFullYear()} Astrorganism Foundation. Connecting with Luna.
-        </Footer>
-      </AppContainer>
-    </Router>
+                <Route
+                  path="*"
+                  element={ 
+                    currentUser ? (
+                      stripeRole === 'active' ? <Navigate to="/chat" replace /> : <Navigate to="/subscribe" replace />
+                    ) : (
+                      <Navigate to="/login" replace /> // Default redirect for non-logged-in users is login
+                    )
+                  }
+                />
+              </Routes>
+            </MainContent>
+
+            <Footer>
+              &copy; {new Date().getFullYear()} Astrorganism Foundation. Connecting with Luna.
+            </Footer>
+          </AppContainer>
+        </Suspense>
+      </Router>
+    </ThemeProvider>
   );
-}
+};
+
+// Wrap the main content with the Provider
+const App: React.FC = () => {
+  return (
+    <AuthSubscriptionProvider>
+      <AppContent />
+    </AuthSubscriptionProvider>
+  );
+};
 
 export default App;

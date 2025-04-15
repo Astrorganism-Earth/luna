@@ -1,8 +1,6 @@
 import { createGlobalStyle } from 'styled-components';
 
 export const GlobalStyle = createGlobalStyle`
-  /* Import Fonts Here (Example using Google Fonts - replace with your method) */
-  @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;700&display=swap');
   /* You'll need to host or find a CDN for OpenDyslexic */
 
   *,

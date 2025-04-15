@@ -18,7 +18,7 @@
   "dependencies": {
     "@netlify/functions": "^3.0.4",
     "@stripe/react-stripe-js": "^3.6.0",
-    "@stripe/stripe-js": "^7.0.0",
+    "@stripe/stripe-js": "^7.1.0",
     "axios": "^1.8.4",
     "firebase": "^11.6.0",
     "firebase-admin": "^13.2.0",
@@ -29,6 +29,7 @@
     "react-dom": "^19.1.0",
     "react-i18next": "^15.4.1",
     "react-router-dom": "^7.5.0",
+    "stripe": "^18.0.0",
     "styled-components": "^6.1.17"
   }
 }
