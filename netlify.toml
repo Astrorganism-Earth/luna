@@ -1,0 +1,26 @@
+# netlify.toml
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+# Settings for local development using 'netlify dev'
+[dev]
+  # Port that Netlify Dev should proxy requests to (your Vite server)
+  targetPort = 3000
+  # Automatically discover and run the framework's dev command
+  # (usually not needed if auto-detection works, but explicit can help)
+  # command = "npm run dev" 
+  # Port for the Netlify Dev server itself (default is 8888)
+  # port = 8888 
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Optional: Set environment variables specifically for functions
+# [functions]
+#   [functions.environment]
+#     SOME_VAR = "value"
