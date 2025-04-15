@@ -11,18 +11,21 @@ if (!admin.apps.length) {
     // Get credentials from environment variables
     const projectId = process.env.FIREBASE_PROJECT_ID;
     const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-    // Try reading private key directly, assuming env var handles newlines
-    const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+    const rawPrivateKey = process.env.FIREBASE_PRIVATE_KEY;
 
-    if (!projectId || !clientEmail || !privateKey) {
+    if (!projectId || !clientEmail || !rawPrivateKey) {
       throw new Error('Firebase Admin SDK credentials missing or incomplete in environment variables.');
     }
+
+    // IMPORTANT: Replace literal '\n' characters with actual newlines
+    // This handles potential issues with how multi-line env vars are stored/retrieved.
+    const privateKey = rawPrivateKey.replace(/\\n/g, '\n');
 
     adminApp = admin.initializeApp({
       credential: admin.credential.cert({
         projectId: projectId,
         clientEmail: clientEmail,
-        privateKey: privateKey, // Use directly
+        privateKey: privateKey, // Use the processed key
       }),
     });
     console.log('[verify-access-code] Firebase Admin SDK initialized successfully.');
