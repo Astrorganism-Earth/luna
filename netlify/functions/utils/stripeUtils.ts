@@ -37,6 +37,17 @@ export const findOrCreateStripeCustomer = async (
                      console.warn(`Stripe customer ${existingStripeCustomerId} from claims not found or deleted in Stripe. Searching by email...`);
                 } else {
                     console.log(`findOrCreateStripeCustomer: Verified customer ${existingStripeCustomerId} exists in Stripe.`);
+                    // --- ADDED: Ensure metadata exists even when found via claims ---
+                    if (!customer.metadata?.firebaseUid) {
+                        try {
+                            await stripe.customers.update(customer.id, { metadata: { firebaseUid: uid } });
+                            console.log(`findOrCreateStripeCustomer: Updated Stripe customer ${customer.id} metadata (found via claims) with firebaseUid=${uid}`);
+                        } catch (metadataError: any) {
+                            console.error(`findOrCreateStripeCustomer: Failed to update metadata for existing customer ${customer.id} (found via claims): ${metadataError.message}`);
+                            // Log error but proceed, claims check succeeded.
+                        }
+                    }
+                    // --- END ADDED --- 
                     return { customerId: existingStripeCustomerId, error: null };
                 }
             } catch (retrieveError: any) {
