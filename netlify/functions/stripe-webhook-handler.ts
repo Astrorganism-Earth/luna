@@ -2,79 +2,88 @@
 import { Handler, HandlerEvent, HandlerContext, HandlerResponse } from '@netlify/functions';
 import Stripe from 'stripe';
 import admin from 'firebase-admin';
+import { Buffer } from 'buffer'; // Import Buffer
 
-// --- Firebase Admin Initialization (Ensure this matches your create-checkout-session.ts) ---
-const firebaseProjectId = process.env.FIREBASE_PROJECT_ID;
-const firebaseClientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-const firebasePrivateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\n/g, '\n');
-
-if (!firebaseProjectId || !firebaseClientEmail || !firebasePrivateKey) {
-  console.error('Webhook Error: Missing required Firebase environment variables.');
-} else if (!admin.apps.length) {
-  try {
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: firebaseProjectId,
-        clientEmail: firebaseClientEmail,
-        privateKey: firebasePrivateKey,
-      }),
-    });
-    console.log('Webhook: Firebase Admin SDK initialized successfully.');
-  } catch (error) {
-    console.error("Webhook: Firebase Admin initialization error:", error);
-  }
+// --- Firebase Admin Initialization ---
+// Ensure this runs only once
+if (!admin.apps.length) {
+    try {
+        // Decode the base64 private key
+        const privateKey = Buffer.from(process.env.FIREBASE_PRIVATE_KEY!, 'base64').toString('ascii');
+        admin.initializeApp({
+            credential: admin.credential.cert({
+                projectId: process.env.FIREBASE_PROJECT_ID,
+                clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                privateKey: privateKey,
+            }),
+        });
+        console.log('Firebase Admin initialized successfully.');
+    } catch (error: any) {
+        console.error('Firebase Admin initialization error:', error);
+        // Optionally, throw the error or handle it to prevent the function from running without Firebase
+        throw new Error(`Firebase Admin SDK Initialization Failed: ${error.message}`);
+    }
+} else {
+    console.log('Firebase Admin already initialized.');
 }
 
-// --- Stripe Initialization (Ensure this matches your create-checkout-session.ts) ---
-const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
-const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET; // Your Stripe webhook signing secret
-const monthlyPriceId = process.env.STRIPE_MONTHLY_PRICE_ID;
-const annualPriceId = process.env.STRIPE_ANNUAL_PRICE_ID;
+const db = admin.firestore(); // Initialize Firestore
 
-if (!stripeSecretKey || !webhookSecret || !monthlyPriceId || !annualPriceId) {
-  console.error('Webhook Error: Missing required Stripe environment variables (SECRET_KEY, WEBHOOK_SECRET, PRICE IDs).');
-  // Consider how to handle this - maybe return 500 immediately in handler?
-}
-
+// --- Stripe Initialization ---
 let stripe: Stripe;
 try {
-  stripe = new Stripe(stripeSecretKey!, {
-    typescript: true,
-    apiVersion: '2025-03-31.basil', // Use the expected API version format
-  });
-  console.log('Webhook: Stripe SDK initialized successfully.');
-} catch (error) {
-  console.error('Webhook: Stripe initialization error:', error);
+    stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+        apiVersion: '2025-03-31.basil', // Revert to match expected type
+        typescript: true,
+    });
+    console.log('Stripe SDK initialized successfully.');
+} catch (error: any) {
+    console.error('Stripe SDK initialization error:', error);
+    throw new Error(`Stripe SDK Initialization Failed: ${error.message}`);
+}
+
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET!;
+const STRIPE_MONTHLY_PRICE_ID = process.env.STRIPE_MONTHLY_PRICE_ID!;
+const STRIPE_ANNUAL_PRICE_ID = process.env.STRIPE_ANNUAL_PRICE_ID!;
+
+// Type definitions for Firestore data
+interface SubscriptionStatusData {
+    status: Stripe.Subscription.Status | 'canceled'; // Use Stripe's status + 'canceled' for deleted
+    plan: 'monthly' | 'annual' | null;
+    endDate: admin.firestore.Timestamp | null;
+    stripeCustomerId: string;
+    stripeSubscriptionId: string;
+    lastUpdated: admin.firestore.Timestamp;
+    energyBalance?: admin.firestore.FieldValue; // Use FieldValue for atomic increments
 }
 
 // Helper function to map Stripe subscription status/price to our role
 const getRoleFromSubscription = (subscription: Stripe.Subscription | null): string | null => {
-  if (!subscription) return null;
-
-  // If subscription is active, determine role by price
-  if (['active', 'trialing'].includes(subscription.status)) {
-    const priceId = subscription.items.data[0]?.price.id;
-    if (priceId === monthlyPriceId) {
-      return 'monthly';
-    } else if (priceId === annualPriceId) {
-      return 'annual';
+    if (!subscription || !['active', 'trialing', 'past_due'].includes(subscription.status)) {
+        return null;
     }
-  }
-  // For other statuses (canceled, past_due, unpaid, incomplete, incomplete_expired), return null (no active role)
-  return null;
+
+    const priceId = subscription.items.data[0]?.price?.id;
+    if (priceId === STRIPE_MONTHLY_PRICE_ID) {
+        return 'monthly';
+    }
+    if (priceId === STRIPE_ANNUAL_PRICE_ID) {
+        return 'annual';
+    }
+    return null;
 };
 
 // Helper function to set Firebase custom claims
 const setFirebaseUserRole = async (firebaseUid: string, role: string | null) => {
-  console.log(`Setting Firebase claims for UID: ${firebaseUid}, Role: ${role}`);
-  try {
-    await admin.auth().setCustomUserClaims(firebaseUid, { stripeRole: role });
-    console.log(`Successfully set custom claims for ${firebaseUid}`);
-  } catch (error) {
-    console.error(`Error setting custom claims for ${firebaseUid}:`, error);
-    // Decide if you need to throw or just log the error
-    throw new Error(`Failed to set Firebase custom claims for UID: ${firebaseUid}`);
-  }
+    console.log(`Setting Firebase claims for UID: ${firebaseUid}, Role: ${role}`);
+    try {
+        await admin.auth().setCustomUserClaims(firebaseUid, { stripeRole: role });
+        console.log(`Successfully set custom claims for ${firebaseUid}`);
+    } catch (error: any) {
+        console.error(`Error setting custom claims for ${firebaseUid}:`, error);
+        // Decide if this error should propagate or just be logged
+        // throw error; // Uncomment if this should halt the process
+    }
 };
 
 // Helper to get Firebase UID from Stripe Customer ID
@@ -85,129 +94,258 @@ const getFirebaseUidFromCustomerId = async (customerId: string): Promise<string 
             console.log(`Customer ${customerId} is deleted.`);
             return null;
         }
-        // Ensure metadata exists and has the firebaseUid property
         const firebaseUid = (customer as Stripe.Customer).metadata?.firebaseUid;
-        if (firebaseUid) {
-            return firebaseUid;
+        if (!firebaseUid) {
+            console.error(`Missing firebaseUid metadata on Stripe customer ${customerId}`);
+            return null;
         }
-        console.warn(`Firebase UID not found in metadata for Stripe Customer ID: ${customerId}`);
-        return null;
-    } catch (error) {
-        console.error(`Error retrieving customer ${customerId}:`, error);
+        console.log(`Retrieved firebaseUid ${firebaseUid} for customer ${customerId}`);
+        return firebaseUid;
+    } catch (error: any) {
+        console.error(`Error retrieving Stripe customer ${customerId}:`, error);
         return null;
     }
 };
 
-// --- Netlify Function Handler ---
-const handler: Handler = async (event: HandlerEvent, context: HandlerContext): Promise<HandlerResponse> => {
-  // Check if SDKs initialized properly
-  if (!stripe || !webhookSecret || !admin.apps.length || !monthlyPriceId || !annualPriceId) {
-    console.error('Webhook handler prerequisites not met (Stripe/Firebase SDK or Env Vars missing).');
-    return { statusCode: 500, body: JSON.stringify({ error: 'Webhook internal configuration error.' }) };
-  }
-
-  const sig = event.headers['stripe-signature'];
-  const rawBody = event.body; // Get body content
-  let stripeEvent: Stripe.Event;
-
-  // Ensure body and signature are present (needed for production verify)
-  if (!rawBody || !sig) {
-    console.error('Webhook Error: Missing body or signature header.');
-    return {
-      statusCode: 400,
-      body: 'Webhook Error: Missing body or signature header.',
-    };
-  }
-
-  try {
-    if (process.env.NODE_ENV === 'development') {
-      // --- LOCAL DEVELOPMENT ONLY: Bypass signature verification --- //
-      console.warn('⚠️ Bypassing Stripe webhook signature verification in development mode.');
-      try {
-        // Attempt to parse the potentially pre-parsed body
-        stripeEvent = JSON.parse(rawBody);
-        console.log(`Webhook received (dev mode): ${stripeEvent.type}, ID: ${stripeEvent.id}`);
-      } catch (parseError: any) {
-        console.error(`Webhook body parsing failed in dev mode: ${parseError.message}`);
-        return { statusCode: 400, body: 'Webhook Error: Invalid JSON body.' };
-      }
-    } else {
-      // --- PRODUCTION: Verify signature --- //
-      stripeEvent = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret!);
-      console.log(`Webhook received: ${stripeEvent.type}, ID: ${stripeEvent.id}`);
+// Helper function to update Firestore with subscription status
+const updateUserSubscriptionInFirestore = async (
+    uid: string,
+    subscriptionData: Partial<SubscriptionStatusData>,
+    energyIncrement?: number
+): Promise<void> => {
+    if (!uid) {
+        console.error('Cannot update Firestore: Missing Firebase UID.');
+        return;
     }
-  } catch (err: any) {
-    // This catch block will now primarily handle production signature errors
-    console.error(`Webhook signature verification failed (production): ${err.message}`);
-    return {
-      statusCode: 400,
-      body: `Webhook Error: ${err.message}`,
-    };
-  }
+    const userSubscriptionRef = db.collection('users').doc(uid).collection('subscription').doc('status');
 
-  // --- Handle Specific Stripe Events ---
-  try {
-    let customerId: string | null = null;
-    let subscription: Stripe.Subscription | null = null;
-    let firebaseUid: string | null = null;
-    let roleToSet: string | null = null;
+    try {
+        console.log(`Updating Firestore for UID: ${uid} at path: ${userSubscriptionRef.path}`);
 
-    switch (stripeEvent.type) {
-      case 'checkout.session.completed':
-        const session = stripeEvent.data.object as Stripe.Checkout.Session;
-        console.log(`Processing checkout.session.completed for session: ${session.id}`);
-        if (session.mode === 'subscription' && session.customer) {
-          customerId = typeof session.customer === 'string' ? session.customer : session.customer.id;
-          // Retrieve the subscription to get status and items
-          if (session.subscription) {
-             const subId = typeof session.subscription === 'string' ? session.subscription : session.subscription.id;
-             subscription = await stripe.subscriptions.retrieve(subId);
-             roleToSet = getRoleFromSubscription(subscription);
-          } else {
-             console.warn(`Subscription ID missing from checkout session: ${session.id}`);
-          }
-        } else {
-            console.log(`Ignoring checkout session ${session.id} (mode: ${session.mode}, customer: ${session.customer})`);
+        const dataToWrite: Partial<SubscriptionStatusData> & { lastUpdated: admin.firestore.Timestamp } = {
+            ...subscriptionData,
+            lastUpdated: admin.firestore.Timestamp.now(),
+        };
+
+        if (energyIncrement && energyIncrement > 0) {
+            // Use Firestore FieldValue for atomic increments
+            dataToWrite.energyBalance = admin.firestore.FieldValue.increment(energyIncrement);
+            console.log(`Incrementing energyBalance by ${energyIncrement} for UID: ${uid}`);
         }
-        break;
 
-      case 'customer.subscription.updated':
-      case 'customer.subscription.deleted': // Often indicates cancellation
-        subscription = stripeEvent.data.object as Stripe.Subscription;
-        console.log(`Processing ${stripeEvent.type} for subscription: ${subscription.id}`);
-        customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer.id;
-        // For deleted, treat as inactive
-        roleToSet = stripeEvent.type === 'customer.subscription.deleted' ? null : getRoleFromSubscription(subscription);
-        break;
+        // Use set with merge to create or update the document
+        await userSubscriptionRef.set(dataToWrite, { merge: true });
+        console.log(`Successfully updated Firestore for UID: ${uid}`);
 
-      // Add other events if needed (e.g., 'invoice.payment_failed')
-      default:
-        console.log(`Unhandled event type: ${stripeEvent.type}`);
-        // Return 200 for unhandled events Stripe expects acknowledgment
-        return { statusCode: 200, body: JSON.stringify({ received: true, handled: false }) };
+    } catch (error: any) {
+        console.error(`Error updating Firestore for UID ${uid}:`, error);
+        // Consider adding retry logic or more specific error handling
+    }
+};
+
+// --- Webhook Event Handlers ---
+
+const handleCheckoutSessionCompleted = async (session: Stripe.Checkout.Session): Promise<void> => {
+    console.log('Handling checkout.session.completed');
+    const customerId = typeof session.customer === 'string' ? session.customer : session.customer?.id;
+    const subscriptionId = typeof session.subscription === 'string' ? session.subscription : session.subscription?.id;
+
+    if (!customerId || !subscriptionId) {
+        console.error('Missing customer or subscription ID in checkout session:', session.id);
+        return;
     }
 
-    // If we have a customer ID from a relevant event, update Firebase claims
-    if (customerId) {
-      firebaseUid = await getFirebaseUidFromCustomerId(customerId);
-      if (firebaseUid) {
-        await setFirebaseUserRole(firebaseUid, roleToSet);
-      } else {
-        console.error(`Could not find Firebase UID for Stripe Customer ID: ${customerId} related to event ${stripeEvent.id}`);
-        // Consider how critical this is - maybe return 500?
-      }
-    } else {
-        console.log(`No customer ID found for event ${stripeEvent.id}, type ${stripeEvent.type}`);
+    const firebaseUid = await getFirebaseUidFromCustomerId(customerId);
+    if (!firebaseUid) {
+        console.error(`Could not find Firebase UID for customer ${customerId}`);
+        return;
     }
 
-    // Acknowledge receipt of the event to Stripe
-    return { statusCode: 200, body: JSON.stringify({ received: true, handled: true }) };
+    // Retrieve the full subscription object to get details like end date and price
+    let subscription: Stripe.Subscription;
+    try {
+        subscription = await stripe.subscriptions.retrieve(subscriptionId);
+        console.log(`Retrieved subscription ${subscriptionId} details.`);
+    } catch (error: any) {
+        console.error(`Failed to retrieve subscription ${subscriptionId}:`, error.message);
+        return;
+    }
 
-  } catch (error: any) {
-    console.error(`Error processing webhook event ${stripeEvent.id}:`, error);
-    // Return 500 if internal processing fails
-    return { statusCode: 500, body: JSON.stringify({ error: `Internal server error processing webhook: ${error.message}` }) };
-  }
+    const role = getRoleFromSubscription(subscription);
+    const plan = role; // Assuming role and plan map directly here
+    const endDate = (subscription as any).current_period_end ? admin.firestore.Timestamp.fromMillis((subscription as any).current_period_end * 1000) : null; // Workaround for type issue
+    const status = subscription.status;
+
+    let energyIncrement = 0;
+    if (status === 'active' || status === 'trialing') { // Grant energy on activation/trial start
+        if (plan === 'monthly') energyIncrement = 1111;
+        if (plan === 'annual') energyIncrement = 11111;
+    }
+
+    // Update Firestore
+    await updateUserSubscriptionInFirestore(firebaseUid, {
+        status, // Type should now be compatible
+        plan: plan as 'monthly' | 'annual' | null, // Explicit cast for safety
+        endDate,
+        stripeCustomerId: customerId,
+        stripeSubscriptionId: subscriptionId,
+    }, energyIncrement);
+
+    // Also update custom claims (optional, but useful for quick checks)
+    await setFirebaseUserRole(firebaseUid, role);
+};
+
+const handleSubscriptionUpdate = async (subscription: Stripe.Subscription): Promise<void> => {
+    console.log(`Handling customer.subscription.updated for subscription: ${subscription.id}`);
+    const customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer?.id;
+    if (!customerId) {
+        console.error('Missing customer ID in subscription update:', subscription.id);
+        return;
+    }
+
+    const firebaseUid = await getFirebaseUidFromCustomerId(customerId);
+    if (!firebaseUid) {
+        console.error(`Could not find Firebase UID for customer ${customerId}`);
+        return;
+    }
+
+    const role = getRoleFromSubscription(subscription);
+    const plan = role;
+    const endDate = (subscription as any).current_period_end ? admin.firestore.Timestamp.fromMillis((subscription as any).current_period_end * 1000) : null; // Workaround for type issue
+    const status = subscription.status;
+
+    // Determine if energy should be granted (e.g., renewal)
+    let energyIncrement = 0;
+    // Example: Check if the update represents a successful payment/renewal
+    // This logic might need refinement based on which specific 'update' events trigger energy
+    // For now, we only grant energy explicitly on checkout.session.completed
+    // if (status === 'active' && /* some condition indicating renewal */) {
+    //     if (plan === 'monthly') energyIncrement = 1111;
+    //     if (plan === 'annual') energyIncrement = 11111;
+    // }
+
+    // Update Firestore
+    await updateUserSubscriptionInFirestore(firebaseUid, {
+        status, // Type should now be compatible
+        plan: plan as 'monthly' | 'annual' | null, // Explicit cast for safety
+        endDate,
+        stripeCustomerId: customerId,
+        stripeSubscriptionId: subscription.id,
+    }, energyIncrement);
+
+    // Also update custom claims
+    await setFirebaseUserRole(firebaseUid, role);
+};
+
+const handleSubscriptionDeleted = async (subscription: Stripe.Subscription): Promise<void> => {
+    console.log(`Handling customer.subscription.deleted for subscription: ${subscription.id}`);
+    const customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer?.id;
+    if (!customerId) {
+        console.error('Missing customer ID in subscription delete:', subscription.id);
+        return;
+    }
+
+    const firebaseUid = await getFirebaseUidFromCustomerId(customerId);
+    if (!firebaseUid) {
+        console.error(`Could not find Firebase UID for customer ${customerId}`);
+        return;
+    }
+
+    // Update Firestore status to 'canceled'
+    await updateUserSubscriptionInFirestore(firebaseUid, {
+        status: 'canceled', // Explicitly set status
+        plan: null, // Clear the plan
+        endDate: null, // Clear the end date
+        stripeCustomerId: customerId,
+        stripeSubscriptionId: subscription.id,
+        // Decide if energy balance should be reset
+        // energyBalance: 0, // Uncomment to reset energy
+    });
+
+    // Also update custom claims
+    await setFirebaseUserRole(firebaseUid, null);
+};
+
+// --- Main Handler ---
+
+const handler: Handler = async (event: HandlerEvent, context: HandlerContext): Promise<HandlerResponse> => {
+    console.log('Webhook handler invoked.');
+
+    if (event.httpMethod !== 'POST') {
+        console.warn('Received non-POST request');
+        return { statusCode: 405, body: 'Method Not Allowed' };
+    }
+
+    const sig = event.headers['stripe-signature'];
+    const rawBody = event.body;
+
+    if (!sig || !rawBody) {
+        console.error('Missing Stripe signature or body');
+        return { statusCode: 400, body: 'Webhook Error: Missing signature or body' };
+    }
+
+    let stripeEvent: Stripe.Event;
+
+    try {
+        // Verify the webhook signature
+        // For local testing, STRIPE_WEBHOOK_SECRET might be empty, bypass verification ONLY IN DEV
+        if (process.env.NODE_ENV !== 'development' && STRIPE_WEBHOOK_SECRET) {
+            console.log('Verifying Stripe webhook signature...');
+            stripeEvent = stripe.webhooks.constructEvent(rawBody, sig, STRIPE_WEBHOOK_SECRET);
+            console.log('Signature verified.');
+        } else if (process.env.NODE_ENV === 'development'){
+            console.warn('DEVELOPMENT MODE: Skipping Stripe webhook signature verification.');
+            stripeEvent = JSON.parse(rawBody) as Stripe.Event;
+        } else {
+            console.error('STRIPE_WEBHOOK_SECRET is not set in production.');
+            return { statusCode: 500, body: 'Webhook configuration error.' };
+        }
+
+    } catch (err: any) {
+        console.error(`Webhook signature verification failed: ${err.message}`);
+        return { statusCode: 400, body: `Webhook Error: ${err.message}` };
+    }
+
+    // Handle the event
+    try {
+        console.log(`Received Stripe event type: ${stripeEvent.type}`);
+        const eventObject = stripeEvent.data.object as any; // Use 'any' carefully or define specific types
+
+        switch (stripeEvent.type) {
+            case 'checkout.session.completed':
+                await handleCheckoutSessionCompleted(eventObject as Stripe.Checkout.Session);
+                break;
+            case 'customer.subscription.updated':
+                // Includes renewals, plan changes, cancellations that haven't fully deleted yet
+                await handleSubscriptionUpdate(eventObject as Stripe.Subscription);
+                break;
+            case 'customer.subscription.deleted':
+                // Occurs when a subscription is definitively canceled
+                await handleSubscriptionDeleted(eventObject as Stripe.Subscription);
+                break;
+            case 'invoice.paid':
+                // Optional: Handle successful payment, could trigger renewal logic if needed
+                console.log('Invoice paid event received for:', eventObject.id);
+                // You might retrieve the subscription from the invoice and call handleSubscriptionUpdate
+                // const subscriptionId = eventObject.subscription;
+                // if (subscriptionId) { /* Retrieve subscription and handle */ }
+                break;
+            case 'invoice.payment_failed':
+                // Optional: Handle failed payments, maybe update status to 'past_due'
+                console.log('Invoice payment failed event received for:', eventObject.id);
+                // const subscriptionId = eventObject.subscription;
+                // if (subscriptionId) { /* Retrieve subscription and update status */ }
+                break;
+            default:
+                console.log(`Unhandled event type: ${stripeEvent.type}`);
+        }
+
+        return { statusCode: 200, body: JSON.stringify({ received: true }) };
+
+    } catch (error: any) {
+        console.error(`Error processing webhook event ${stripeEvent.id}:`, error);
+        return { statusCode: 500, body: `Webhook processing error: ${error.message}` };
+    }
 };
 
 export { handler };

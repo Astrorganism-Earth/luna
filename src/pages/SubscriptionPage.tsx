@@ -215,7 +215,7 @@ const SubscriptionPage: React.FC = () => {
     }
 
     try {
-      const portalUrl = await createCustomerPortalSession();
+      const portalUrl = await createCustomerPortalSession(); // Correct: Fetches token internally
       window.location.href = portalUrl; // Redirect to Stripe Customer Portal
     } catch (err: any) {
       console.error("Manage Subscription Error:", err);

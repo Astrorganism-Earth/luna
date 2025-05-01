@@ -70,6 +70,18 @@ export const findOrCreateStripeCustomer = async (
 
         if (foundCustomer) {
             console.log(`findOrCreateStripeCustomer: Found existing Stripe Customer ID: ${foundCustomer.id} for Firebase UID: ${uid}`);
+
+            // Ensure the existing customer has the Firebase UID in metadata
+            if (!foundCustomer.metadata?.firebaseUid) {
+                try {
+                    await stripe.customers.update(foundCustomer.id, { metadata: { firebaseUid: uid } });
+                    console.log(`findOrCreateStripeCustomer: Updated Stripe customer ${foundCustomer.id} metadata with firebaseUid=${uid}`);
+                } catch (metadataError: any) {
+                    console.error(`findOrCreateStripeCustomer: Failed to update metadata for existing customer ${foundCustomer.id}: ${metadataError.message}`);
+                    // Decide if this is critical. Proceeding might still work if claims update succeeds.
+                }
+            }
+
             // IMPORTANT: Update Firebase custom claims with the found Stripe Customer ID
             try {
                 await admin.auth().setCustomUserClaims(uid, { ...userRecord.customClaims, stripeCustomerId: foundCustomer.id });
@@ -86,7 +98,7 @@ export const findOrCreateStripeCustomer = async (
             const newCustomer = await stripe.customers.create({
                 email: email,
                 metadata: {
-                    firebaseUID: uid,
+                    firebaseUid: uid,
                 },
                 name: userRecord.displayName || email, // Optional: use display name if available
             });

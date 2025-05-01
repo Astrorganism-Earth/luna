@@ -58,7 +58,6 @@ try {
 // Define the structure of the incoming request body
 interface RequestBody {
   planIdentifier: 'monthly' | 'annual';
-  firebaseToken: string;
   // Add customerId or userEmail later if needed for linking subscriptions
 }
 
@@ -99,30 +98,32 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext): P
     }
 
     // Parse the request body
-    const { planIdentifier, firebaseToken } = JSON.parse(event.body) as RequestBody;
+    const { planIdentifier } = JSON.parse(event.body) as RequestBody;
 
     // **Log received planIdentifier**
     console.log('Received planIdentifier:', planIdentifier);
 
-    // 1. Verify Firebase Token
-    let decodedToken;
-    if (!firebaseToken) {
-      console.error("Checkout Error: Firebase token missing.");
+    // 1. Verify Firebase Token from Header
+    const firebaseTokenFromHeader = event.headers?.authorization?.split('Bearer ')[1];
+
+    if (!firebaseTokenFromHeader) {
+      console.error("Checkout Error: Authorization header missing or malformed.");
       return {
-        headers: { 'Content-Type': 'application/json' }, 
-        statusCode: 400,
-        body: JSON.stringify({ error: 'Firebase token is required.' }),
+        headers: { 'Content-Type': 'application/json' },
+        statusCode: 401, // Unauthorized
+        body: JSON.stringify({ error: 'Authorization token is required.' }),
       };
     }
 
+    let decodedToken;
     try {
-      decodedToken = await admin.auth().verifyIdToken(firebaseToken);
-    } catch (error) {
-      console.error("Checkout Error: Firebase token verification failed:", error);
+      decodedToken = await admin.auth().verifyIdToken(firebaseTokenFromHeader);
+    } catch (error: any) {
+      console.error('Firebase token verification failed:', error);
       return {
-        headers: { 'Content-Type': 'application/json' }, 
-        statusCode: 401,
-        body: JSON.stringify({ error: 'Invalid Firebase token.' })
+        headers: { 'Content-Type': 'application/json' },
+        statusCode: 401, // Unauthorized
+        body: JSON.stringify({ error: 'Invalid or expired Firebase token.', details: error.message }),
       };
     }
     const userId = decodedToken.uid;
@@ -228,11 +229,20 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext): P
 
     console.log('Stripe Checkout Session created:', session.id);
 
-    // 5. Return the Session ID in a JSON object
+    // 5. Return the Session URL in a JSON object
+    if (!session.url) {
+      console.error('Stripe Checkout Session created but missing URL:', session.id);
+      return {
+        headers: { 'Content-Type': 'application/json' },
+        statusCode: 500,
+        body: JSON.stringify({ error: 'Failed to get checkout URL from Stripe.' }),
+      };
+    }
+
     return {
       headers: { 'Content-Type': 'application/json' },
       statusCode: 200,
-      body: JSON.stringify({ sessionId: session.id }),
+      body: JSON.stringify({ checkoutUrl: session.url }), // Return the actual URL
     };
 
   } catch (error: any) {
