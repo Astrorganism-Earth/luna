@@ -2,6 +2,7 @@
 import { Handler, HandlerEvent, HandlerContext, HandlerResponse } from '@netlify/functions';
 import Stripe from 'stripe';
 import admin from 'firebase-admin';
+import { findOrCreateStripeCustomer } from './utils/stripeUtils'; // Import the utility function
 
 // --- Firebase Admin Initialization --- 
 // Ensure your Firebase service account key JSON is correctly set as a Netlify environment variable
@@ -45,6 +46,7 @@ if (!stripeSecretKey) {
 let stripe: Stripe;
 try {
   stripe = new Stripe(stripeSecretKey, {
+    apiVersion: '2025-03-31.basil', // Update API version to match type
     typescript: true,
   });
   console.log('Stripe SDK initialized successfully.');
@@ -170,61 +172,19 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext): P
     // **Log the selected Price ID**
     console.log(`Selected Price ID for plan '${planIdentifier}':`, priceId);
 
-    // Function to find or create a Stripe customer associated with Firebase UID
-    const findOrCreateStripeCustomer = async (firebaseUid: string, email?: string): Promise<Stripe.Customer> => {
-      console.log(`DEBUG: findOrCreateStripeCustomer: Searching for UID=${firebaseUid}, Email=${email}`); // Log inputs
-
-      const listParams: Stripe.CustomerListParams = { limit: 100 };
-      if (email) {
-        listParams.email = email;
-      }
-      console.log('DEBUG: Calling stripe.customers.list with params:', JSON.stringify(listParams, null, 2)); // Log params before call
-
-      let customers: Stripe.Response<Stripe.ApiList<Stripe.Customer>>;
-      try {
-        // Check if customer exists by Firebase UID metadata
-        customers = await stripe.customers.list(listParams); // Use explicitly built params
-        console.log(`DEBUG: stripe.customers.list returned ${customers.data.length} customers.`); // Log result count
-      } catch (listError) {
-        console.error('DEBUG: Error during stripe.customers.list:', listError);
-        throw listError; // Re-throw the error if listing fails
-      }
-
-      let customer = customers.data.find(c => c.metadata && c.metadata.firebaseUid === firebaseUid); // Safer check for c.metadata
-
-      if (customer) {
-        console.log(`findOrCreateStripeCustomer: Found existing Stripe Customer ID: ${customer.id} for Firebase UID: ${firebaseUid}`);
-        return customer;
-      }
-
-      // If not found by metadata, try creating one
-      console.log(`findOrCreateStripeCustomer: No customer found for Firebase UID ${firebaseUid}. Creating new customer.`);
-      try {
-        const createParams: Stripe.CustomerCreateParams = {
-          metadata: { firebaseUid: firebaseUid }, // Ensure metadata is set here
-        };
-        if (email) {
-          createParams.email = email;
-        }
-        console.log('DEBUG: Calling stripe.customers.create with params:', JSON.stringify(createParams, null, 2)); // Log create params
-        customer = await stripe.customers.create(createParams);
-        console.log(`findOrCreateStripeCustomer: Created new Stripe Customer ID: ${customer.id} for Firebase UID: ${firebaseUid}`);
-        return customer;
-      } catch (error) {
-        console.error("Error creating Stripe customer:", error);
-        // Handle specific Stripe errors if necessary
-        if (error instanceof Error) {
-          throw new Error(`Failed to create Stripe customer: ${error.message}`);
-        }
-        throw new Error('Failed to create Stripe customer due to an unknown error.');
-      }
-    };
-
     // 3. Find or Create Stripe Customer
     let stripeCustomerId: string;
     try {
-      const customer = await findOrCreateStripeCustomer(userId, userEmail);
-      stripeCustomerId = customer.id;
+      const { customerId, error: customerError } = await findOrCreateStripeCustomer(userId, userEmail, stripe);
+      if (customerError || !customerId) {
+        console.error('Error finding/creating Stripe customer:', customerError);
+        return {
+          headers: { 'Content-Type': 'application/json' },
+          statusCode: 500,
+          body: JSON.stringify({ error: customerError || 'Failed to process customer information.' }),
+        };
+      }
+      stripeCustomerId = customerId;
       console.log(`findOrCreateStripeCustomer: Using Stripe Customer ID: ${stripeCustomerId} for Firebase UID: ${userId}`);
     } catch (error) {
       console.error('Error finding or creating Stripe customer:', error);
