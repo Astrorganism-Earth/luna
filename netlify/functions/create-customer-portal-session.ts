@@ -139,16 +139,22 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext) =>
     }
     console.log(`Using Stripe Customer ID: ${customerId}`);
 
-    // 7. Create a Stripe Billing Portal session
-    const returnUrl = event.headers.referer || process.env.URL || 'http://localhost:8888'; // Get origin or fallback
-    console.log(`Creating portal session for customer ${customerId}. Return URL base: ${returnUrl}`);
+    // 7. Determine the return URL
+    const returnUrlBase = process.env.NETLIFY_DEV === 'true'
+      ? `http://localhost:8888/subscription`
+      : process.env.URL + '/subscription';
+    const returnUrl = returnUrlBase;
+    console.log(`Creating portal session for customer ${customerId}. Return URL: ${returnUrl}`);
+
+    // 8. Create the Stripe Billing Portal Session (implicitly using default config)
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${new URL(returnUrl).origin}/subscribe`, // Redirect back to subscription page
+      return_url: returnUrl,
+      // No 'configuration' parameter here, rely on Stripe default
     });
-    console.log(`Portal session created: ${portalSession.id}`);
+    console.log(`Portal session created successfully: ${portalSession.id}`);
 
-    // 8. Return the Portal session URL
+    // 9. Return the session URL
     console.log('--- create-customer-portal-session handler finished successfully ---');
     return {
       statusCode: 200,
@@ -165,6 +171,13 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext) =>
         statusCode = 401;
         message = 'Authentication error. Please log in again.';
         console.warn(`Authentication error encountered: ${error.code}`);
+    } else if (error.type === 'StripeCardError' || error.type === 'StripeInvalidRequestError') {
+        console.error(`Stripe Error Details: Code=${error.code}, Param=${error.param}, Message=${error.message}`);
+        if (error.message.includes('No configuration provided')) {
+            message = 'Failed to create customer portal session. Stripe configuration missing or not found.';
+            const errorDetails = 'Please ensure a default customer portal configuration is saved in your Stripe Dashboard (Test Mode) under Settings > Billing > Customer Portal.';
+            console.error(`Error Details: ${errorDetails}`);
+        }
     }
 
     console.log(`--- create-customer-portal-session handler finished with error (${statusCode}) ---`);
