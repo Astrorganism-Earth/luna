@@ -1,6 +1,6 @@
 // netlify/functions/check-email-exists.ts
 import type { Handler, HandlerEvent } from '@netlify/functions';
-import { auth } from '../firebaseAdmin';
+import { auth } from './firebaseAdmin';
 
 interface RequestBody {
   email: string;
