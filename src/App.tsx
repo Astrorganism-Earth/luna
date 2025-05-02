@@ -82,8 +82,8 @@ const AppContent: React.FC = () => {
             <MainContent>
               <Routes>
                 {/* Public routes */}
-                <Route path="/login" element={!currentUser ? <LoginPage /> : (stripeRole === 'active' ? <Navigate to="/chat" replace /> : <Navigate to="/subscribe" replace />)} />
-                <Route path="/register" element={!currentUser ? <RegisterPage /> : (stripeRole === 'active' ? <Navigate to="/chat" replace /> : <Navigate to="/subscribe" replace />)} />
+                <Route path="/login" element={!currentUser ? <LoginPage /> : (stripeRole === 'monthly' || stripeRole === 'annual' ? <Navigate to="/chat" replace /> : <Navigate to="/subscribe" replace />)} />
+                <Route path="/register" element={!currentUser ? <RegisterPage /> : (stripeRole === 'monthly' || stripeRole === 'annual' ? <Navigate to="/chat" replace /> : <Navigate to="/subscribe" replace />)} />
                 <Route path="/login/callback" element={<LoginCallbackPage />} />
 
                 {/* Protected Routes - require login */}
@@ -94,10 +94,10 @@ const AppContent: React.FC = () => {
                 <Route
                   path="/chat"
                   element={
-                    currentUser && stripeRole === 'active' ? (
+                    currentUser && (stripeRole === 'monthly' || stripeRole === 'annual') ? (
                       <ChatPage />
                     ) : (
-                      // If logged in but no role, redirect to subscribe, else to login
+                      // If logged in but no valid role, redirect to subscribe, else to login
                       currentUser ? <Navigate to="/subscribe" replace /> : <Navigate to="/login" replace />
                     )
                   }
@@ -105,9 +105,9 @@ const AppContent: React.FC = () => {
 
                 <Route
                   path="*"
-                  element={ 
+                  element={
                     currentUser ? (
-                      stripeRole === 'active' ? <Navigate to="/chat" replace /> : <Navigate to="/subscribe" replace />
+                      (stripeRole === 'monthly' || stripeRole === 'annual') ? <Navigate to="/chat" replace /> : <Navigate to="/subscribe" replace />
                     ) : (
                       <Navigate to="/login" replace /> // Default redirect for non-logged-in users is login
                     )
