@@ -57,6 +57,17 @@ try {
   throw new Error('Failed to initialize Stripe SDK in webhook.');
 }
 
+// Price IDs for energy grants
+const monthlyPriceId = process.env.STRIPE_MONTHLY_PRICE_ID;
+const annualPriceId = process.env.STRIPE_ANNUAL_PRICE_ID;
+if (!monthlyPriceId || !annualPriceId) {
+    throw new Error('Missing STRIPE_MONTHLY_PRICE_ID or STRIPE_ANNUAL_PRICE_ID env vars.');
+}
+
+// Energy grants for subscriptions
+const MONTHLY_ENERGY_GRANT = 11111;
+const ANNUAL_ENERGY_GRANT = 111111;
+
 // --- Firestore Database Update Function --- 
 // Replaces the old updateUserSubscriptionStatus
 const updateFirebaseSubscriptionData = async (
@@ -150,6 +161,13 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext) =>
                             currentPeriodEnd: currentPeriodEnd,
                             customerId: customerId
                         });
+                        // Increment energy balance based on plan
+                        await admin.firestore().collection('users').doc(firebaseUid).set({
+                            energyBalance: admin.firestore.FieldValue.increment(
+                                planId === monthlyPriceId ? MONTHLY_ENERGY_GRANT : ANNUAL_ENERGY_GRANT
+                            )
+                        }, { merge: true });
+                        console.log(`Energy balance incremented by ${planId === monthlyPriceId ? MONTHLY_ENERGY_GRANT : ANNUAL_ENERGY_GRANT} for user ${firebaseUid}`);
                     } catch (subError) {
                         console.error(`Error retrieving subscription ${session.subscription} after checkout completed:`, subError);
                         // Decide if you still want to update status partially or log error
@@ -201,6 +219,13 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext) =>
                         currentPeriodEnd: currentPeriodEnd,
                         customerId: customerId
                     });
+                    // For reactivations, optionally top up energy
+                    await admin.firestore().collection('users').doc(firebaseUid).set({
+                        energyBalance: admin.firestore.FieldValue.increment(
+                            planId === monthlyPriceId ? MONTHLY_ENERGY_GRANT : ANNUAL_ENERGY_GRANT
+                        )
+                    }, { merge: true });
+                    console.log(`Energy balance incremented by ${planId === monthlyPriceId ? MONTHLY_ENERGY_GRANT : ANNUAL_ENERGY_GRANT} for user ${firebaseUid} on subscription update`);
                 } else {
                     console.warn(`Ignoring customer.subscription.updated: Could not determine Firebase UID for customer ${customerId}.`);
                 }

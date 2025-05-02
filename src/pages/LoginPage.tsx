@@ -213,10 +213,11 @@ const LoginPage: React.FC = () => {
   const [authMode, setAuthMode] = useState<AuthMode>('landing');
   const [isVerifying, setIsVerifying] = useState(false);
   const [isCodeVerified, setIsCodeVerified] = useState(false);
-  const [magicLinkSent, setMagicLinkSent] = useState(false);
+  const [magicLinkSent, setMagicLinkSent] = useState(false); 
+  const [registerLinkSent, setRegisterLinkSent] = useState(false); 
   
   // Hooks
-  const { sendSignInLinkToEmail, loading, error: authError } = useAuth();
+  const { sendSignInLinkToEmail, loading, error: authError, currentUser } = useAuth();
   const { t } = useTranslation();
 
   // On mount, check if magic link was recently sent
@@ -232,6 +233,21 @@ const LoginPage: React.FC = () => {
         }
       } catch {}
     }
+
+    // Also check for register link sent
+    const registrationPersisted = localStorage.getItem('registerLinkSent');
+    if (registrationPersisted) {
+      try {
+        const parsed = JSON.parse(registrationPersisted);
+        if (parsed.registerLinkSent && parsed.email) {
+          setRegisterLinkSent(true);
+          setEmail(parsed.email);
+          setIsCodeVerified(true); 
+          setAuthMode('register'); 
+          setMessage(`Verification link sent to ${parsed.email}. Check your inbox!`);
+        }
+      } catch {}
+    }
   }, [t]);
 
   // Timer to auto-hide magic link message
@@ -243,19 +259,36 @@ const LoginPage: React.FC = () => {
         setEmail('');
         setMessage(null);
         localStorage.removeItem('magicLinkSent');
-      }, 30000); // 30 seconds
+      }, 30000); 
     }
     return () => {
       if (timer) clearTimeout(timer);
     };
   }, [magicLinkSent]);
 
+  // Timer to auto-hide register link message
+  React.useEffect(() => {
+    let timer: NodeJS.Timeout | undefined;
+    if (registerLinkSent) {
+      timer = setTimeout(() => {
+        setRegisterLinkSent(false);
+        setEmail('');
+        setMessage(null);
+        setIsCodeVerified(false);
+        localStorage.removeItem('registerLinkSent');
+      }, 30000); 
+    }
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [registerLinkSent]);
+  
   // Handle login submission (magic link)
   const handleLoginSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setMessage(null); 
     setIsError(false);
-    setMagicLinkSent(false); // reset on new submit
+    setMagicLinkSent(false); 
     localStorage.removeItem('magicLinkSent');
 
     if (!email) {
@@ -346,6 +379,7 @@ const LoginPage: React.FC = () => {
   const handleSendMagicLink = async () => {
     setMessage(null);
     setIsError(false);
+    setRegisterLinkSent(false);
 
     const actionCodeSettings = {
       url: `${window.location.origin}/login/callback`,
@@ -357,6 +391,9 @@ const LoginPage: React.FC = () => {
       window.localStorage.setItem('emailForSignIn', email);
       setMessage(`Verification link sent to ${email}. Check your inbox!`);
       setIsError(false);
+      setRegisterLinkSent(true);
+      // Persist registration status
+      localStorage.setItem('registerLinkSent', JSON.stringify({ registerLinkSent: true, email }));
     } catch (error: any) {
       console.error('Error sending magic link:', error);
       setMessage(error.message || 'Failed to send verification link.');
@@ -392,6 +429,16 @@ const LoginPage: React.FC = () => {
     localStorage.removeItem('magicLinkSent');
   };
 
+  // When user wants to try registration again
+  const resetRegisterLinkState = () => {
+    setRegisterLinkSent(false);
+    setEmail('');
+    setAccessCode('');
+    setIsCodeVerified(false);
+    setMessage(null);
+    localStorage.removeItem('registerLinkSent');
+  };
+  
   return (
     <PageContainer>
       <FormContainer>
@@ -471,7 +518,7 @@ const LoginPage: React.FC = () => {
         )}
 
         {/* Register with Code View */}
-        {authMode === 'register' && !isCodeVerified && (
+        {authMode === 'register' && !isCodeVerified && !currentUser && (
           <>
             <Subtitle>
               Please enter your email and the invitation code you received.
@@ -503,27 +550,46 @@ const LoginPage: React.FC = () => {
         )}
 
         {/* After Code Verification */}
-        {authMode === 'register' && isCodeVerified && (
+        {authMode === 'register' && isCodeVerified && !currentUser && (
           <>
-            <Subtitle>
-              Your invitation code has been verified. You can now receive a magic link to access Luna.
-            </Subtitle>
-            <Button 
-              onClick={handleSendMagicLink} 
-              disabled={loading}
-              style={{ marginTop: '10px' }}
-            >
-              {loading ? 'Sending Link...' : 'Send Magic Link Login'}
-            </Button>
-            
-            <TextButton onClick={() => switchToMode('landing')}>
-              Back
-            </TextButton>
+            {registerLinkSent ? (
+              <VisualSuccessContainer>
+                <Emoji>✉️</Emoji>
+                <VisualSuccessTitle>Welcome to Luna!</VisualSuccessTitle>
+                <p style={{ fontWeight: 500, fontSize: '1.1rem', margin: '20px 0 8px 0' }}>
+                  Magic link sent to <span style={{ color: '#0e1117', background: '#fff', borderRadius: '6px', padding: '2px 10px', fontWeight: 700 }}>{email}</span>
+                </p>
+                <p style={{ marginBottom: 12 }}>Open your email and click the link to access your new account.</p>
+                <p style={{ fontSize: '0.98rem', color: '#0e1117', opacity: 0.85 }}>
+                  Didn't receive it? Check your spam folder or try again.
+                </p>
+                <TextButton style={{ marginTop: 28, color: '#0e1117', fontWeight: 600 }} onClick={resetRegisterLinkState}>
+                  Try again
+                </TextButton>
+              </VisualSuccessContainer>
+            ) : (
+              <>
+                <Subtitle>
+                  Your invitation code has been verified. You can now receive a magic link to access Luna.
+                </Subtitle>
+                <Button 
+                  onClick={handleSendMagicLink} 
+                  disabled={loading}
+                  style={{ marginTop: '10px' }}
+                >
+                  {loading ? 'Sending Link...' : 'Send Magic Link Login'}
+                </Button>
+                
+                <TextButton onClick={() => switchToMode('landing')}>
+                  Back
+                </TextButton>
+              </>
+            )}
           </>
         )}
         
-        {/* Messages - Only show outside the login view */}
-        {authMode !== 'login' && message && (
+        {/* Messages - Only show outside the login view AND when not logged in */}
+        {authMode !== 'login' && !currentUser && message && (
           isError ? (
             <ErrorMessage>{message}</ErrorMessage>
           ) : (
