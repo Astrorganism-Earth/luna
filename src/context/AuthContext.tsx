@@ -44,6 +44,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       console.log('AuthProvider: Auth state changed, user:', user ? user.uid : null);
       setCurrentUser(user);
       setLoading(false); // Initial check complete
+      // --- Clear magic link sent flag on login ---
+      if (user) {
+        localStorage.removeItem('magicLinkSent');
+      }
     });
 
     // Cleanup subscription on unmount
@@ -77,6 +81,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       await firebaseSignOut(auth);
       setCurrentUser(null); // Explicitly set user to null
+      // --- Clear magic link sent flag on logout ---
+      localStorage.removeItem('magicLinkSent');
       console.log('AuthProvider: Signed out successfully.');
     } catch (err: any) {
       console.error('AuthProvider: Error signing out:', err);
