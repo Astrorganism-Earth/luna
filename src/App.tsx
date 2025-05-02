@@ -4,6 +4,7 @@ import styled, { ThemeProvider } from 'styled-components';
 import { theme } from './styles/theme';
 import { GlobalStyle } from './styles/GlobalStyle';
 import { AuthSubscriptionProvider, useAuthSubscription } from './context/AuthSubscriptionContext';
+import { useAuth } from './context/AuthContext';
 
 // Lazy load pages
 const LoginPage = React.lazy(() => import('./pages/LoginPage'));
@@ -21,24 +22,42 @@ const AppContainer = styled.div`
 `;
 
 const Header = styled.header`
-  background-color: #333; 
-  color: white;
-  padding: 1rem 2rem;
+  background-color: #161b22; 
+  color: #e6edf3;
+  padding: 0.8rem 2rem;
+  display: flex;
+  justify-content: space-between; 
+  align-items: center;
+  border-bottom: 1px solid #30363d;
 
   nav ul {
     list-style: none;
     padding: 0;
     margin: 0;
     display: flex;
-    gap: 1rem;
+    gap: 1.5rem; 
+    align-items: center;
   }
 
-  nav a {
-    color: white;
+  nav a,
+  nav button { 
+    color: #c9d1d9; 
     text-decoration: none;
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+    font-size: 0.95rem;
+    transition: color 0.2s ease;
+
     &:hover {
-      text-decoration: underline;
+      color: #58a6ff; 
     }
+  }
+
+  nav button {
+    // Specific button styles if needed, e.g., slight padding
   }
 `;
 
@@ -56,10 +75,22 @@ const Footer = styled.footer`
 `;
 
 const AppContent: React.FC = () => {
-  const { currentUser, stripeRole, loading } = useAuthSubscription();
+  const { currentUser, loading: authLoading, logout } = useAuth();
+  const { stripeRole, loading: subLoading } = useAuthSubscription();
+
+  const loading = authLoading || subLoading;
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      console.log('Logout successful');
+    } catch (error) {
+      console.error('Logout failed:', error);
+    }
+  };
 
   if (loading) {
-    return <div>Loading Luna Core...</div>;
+    return <div>Loading Luna Core...</div>; 
   }
 
   return (
@@ -75,6 +106,11 @@ const AppContent: React.FC = () => {
                   {currentUser && <li><Link to="/subscription">Donate</Link></li>}
                   {!currentUser && <li><Link to="/login">Login</Link></li>}
                   {!currentUser && <li><Link to="/register">Register</Link></li>}
+                  {currentUser && (
+                    <li>
+                      <button onClick={handleLogout}>Logout</button>
+                    </li>
+                  )}
                 </ul>
               </nav>
             </Header>
@@ -97,7 +133,6 @@ const AppContent: React.FC = () => {
                     currentUser && (stripeRole === 'monthly' || stripeRole === 'annual') ? (
                       <ChatPage />
                     ) : (
-                      // If logged in but no valid role, redirect to subscribe, else to login
                       currentUser ? <Navigate to="/subscribe" replace /> : <Navigate to="/login" replace />
                     )
                   }
@@ -109,7 +144,7 @@ const AppContent: React.FC = () => {
                     currentUser ? (
                       (stripeRole === 'monthly' || stripeRole === 'annual') ? <Navigate to="/chat" replace /> : <Navigate to="/subscribe" replace />
                     ) : (
-                      <Navigate to="/login" replace /> // Default redirect for non-logged-in users is login
+                      <Navigate to="/login" replace /> 
                     )
                   }
                 />
@@ -126,7 +161,6 @@ const AppContent: React.FC = () => {
   );
 };
 
-// Wrap the main content with the Provider
 const App: React.FC = () => {
   return (
     <AuthSubscriptionProvider>

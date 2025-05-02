@@ -16,10 +16,13 @@
     "vite": "^6.2.0"
   },
   "dependencies": {
+    "@firebase/app-check": "^0.8.13",
     "@google/generative-ai": "^0.24.1",
     "@netlify/functions": "^3.0.4",
     "@stripe/react-stripe-js": "^3.6.0",
     "@stripe/stripe-js": "^7.1.0",
+    "altcha": "^1.4.3",
+    "altcha-lib": "^1.2.0",
     "axios": "^1.8.4",
     "firebase": "^11.6.0",
     "firebase-admin": "^13.2.0",
