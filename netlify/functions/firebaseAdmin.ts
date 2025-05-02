@@ -10,12 +10,15 @@ if (!firebaseProjectId || !firebaseClientEmail || !firebasePrivateKey) {
   throw new Error('Missing required Firebase environment variables (PROJECT_ID, CLIENT_EMAIL, PRIVATE_KEY)');
 }
 
+// Fix: Ensure correct newlines in private key for Netlify
+const processedPrivateKey = firebasePrivateKey?.replace(/\\n/g, '\n');
+
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert({
       projectId: firebaseProjectId,
       clientEmail: firebaseClientEmail,
-      privateKey: firebasePrivateKey,
+      privateKey: processedPrivateKey,
     }),
   });
 }
