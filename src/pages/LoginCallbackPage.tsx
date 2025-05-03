@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { auth } from '../firebaseConfig'; // Assuming firebaseConfig exports auth
 import { isSignInWithEmailLink, signInWithEmailLink } from 'firebase/auth';
 import styled from 'styled-components';
+import { useAuthSubscription } from '../context/AuthSubscriptionContext';
 
 // Basic styling (can be enhanced later)
 const Container = styled.div`
@@ -32,6 +33,8 @@ const LoginCallbackPage: React.FC = () => {
   const navigate = useNavigate();
   const [message, setMessage] = useState('Verifying your login link...');
   const [error, setError] = useState<string | null>(null);
+  const { stripeRole, loading: subLoading } = useAuthSubscription();
+  const [readyToRedirect, setReadyToRedirect] = useState(false);
 
   useEffect(() => {
     const processSignIn = async () => {
@@ -59,12 +62,9 @@ const LoginCallbackPage: React.FC = () => {
           // 4. Clean up: Remove the email from localStorage
           window.localStorage.removeItem('emailForSignIn');
 
-          // 5. Redirect to the main app page on success
+          // 5. Set ready to redirect
           setMessage('Sign-in successful! Redirecting to the portal...');
-          // Redirect after a short delay to allow the user to see the message
-          setTimeout(() => {
-            navigate('/chat'); // Redirect to the chat page
-          }, 1500);
+          setReadyToRedirect(true);
 
         } catch (err: any) {
           console.error('Error signing in with email link:', err);
@@ -84,6 +84,17 @@ const LoginCallbackPage: React.FC = () => {
 
     processSignIn();
   }, [navigate]); // Dependency array includes navigate
+
+  // After login and subscription load, redirect accordingly
+  useEffect(() => {
+    if (readyToRedirect && !subLoading) {
+      if (stripeRole === 'monthly' || stripeRole === 'annual') {
+        navigate('/chat', { replace: true });
+      } else {
+        navigate('/subscription', { replace: true });
+      }
+    }
+  }, [readyToRedirect, subLoading, stripeRole, navigate]);
 
   return (
     <Container>

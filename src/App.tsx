@@ -118,8 +118,8 @@ const AppContent: React.FC = () => {
             <MainContent>
               <Routes>
                 {/* Public routes */}
-                <Route path="/login" element={!currentUser ? <LoginPage /> : (stripeRole === 'monthly' || stripeRole === 'annual' ? <Navigate to="/chat" replace /> : <Navigate to="/subscribe" replace />)} />
-                <Route path="/register" element={!currentUser ? <RegisterPage /> : (stripeRole === 'monthly' || stripeRole === 'annual' ? <Navigate to="/chat" replace /> : <Navigate to="/subscribe" replace />)} />
+                <Route path="/login" element={!currentUser ? <LoginPage /> : (stripeRole === 'monthly' || stripeRole === 'annual' ? <Navigate to="/chat" replace /> : <Navigate to="/subscription" replace />)} />
+                <Route path="/register" element={!currentUser ? <RegisterPage /> : (stripeRole === 'monthly' || stripeRole === 'annual' ? <Navigate to="/chat" replace /> : <Navigate to="/subscription" replace />)} />
                 <Route path="/login/callback" element={<LoginCallbackPage />} />
 
                 {/* Protected Routes - require login */}
@@ -133,7 +133,7 @@ const AppContent: React.FC = () => {
                     currentUser && (stripeRole === 'monthly' || stripeRole === 'annual') ? (
                       <ChatPage />
                     ) : (
-                      currentUser ? <Navigate to="/subscribe" replace /> : <Navigate to="/login" replace />
+                      currentUser ? <Navigate to="/subscription" replace /> : <Navigate to="/login" replace />
                     )
                   }
                 />
@@ -142,7 +142,7 @@ const AppContent: React.FC = () => {
                   path="*"
                   element={
                     currentUser ? (
-                      (stripeRole === 'monthly' || stripeRole === 'annual') ? <Navigate to="/chat" replace /> : <Navigate to="/subscribe" replace />
+                      (stripeRole === 'monthly' || stripeRole === 'annual') ? <Navigate to="/chat" replace /> : <Navigate to="/subscription" replace />
                     ) : (
                       <Navigate to="/login" replace /> 
                     )
