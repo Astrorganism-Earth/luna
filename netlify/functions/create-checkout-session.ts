@@ -8,30 +8,37 @@ import { findOrCreateStripeCustomer } from './utils/stripeUtils'; // Import the 
 // Ensure your Firebase service account key JSON is correctly set as a Netlify environment variable
 // Note: For local dev with `netlify dev`, put it in your .env file.
 
-// Load Firebase config from individual environment variables
-const firebaseProjectId = process.env.FIREBASE_PROJECT_ID;
-const firebaseClientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-// Replace literal '\n' in the private key from env var with actual newlines
-const firebasePrivateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\n/g, '\n');
-
-if (!firebaseProjectId || !firebaseClientEmail || !firebasePrivateKey) {
-  throw new Error('Missing required Firebase environment variables (PROJECT_ID, CLIENT_EMAIL, PRIVATE_KEY)');
-}
-
+// Initialize Firebase Admin SDK only if it hasn't been initialized yet
 if (!admin.apps.length) {
-  try {
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: firebaseProjectId,
-        clientEmail: firebaseClientEmail,
-        privateKey: firebasePrivateKey,
-      }),
-    });
-    console.log('Firebase Admin SDK initialized successfully.');
-  } catch (error) {
-    console.error("Firebase Admin initialization error:", error);
-    // Stop further execution if Firebase fails to init
-    throw new Error('Failed to initialize Firebase Admin SDK.'); 
+  const firebasePrivateKey = process.env.FIREBASE_PRIVATE_KEY;
+  if (!firebasePrivateKey) {
+    console.error('Firebase private key is not defined in environment variables.');
+    // Potentially throw an error or handle appropriately
+    // For now, we'll log and proceed, but Stripe calls might fail if Firebase is needed before this
+    // throw new Error('Firebase private key is not defined.');
+  }
+  
+  // Only initialize if all required Firebase env vars are present
+  if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && firebasePrivateKey) {
+    try {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: firebasePrivateKey, 
+        }),
+        // databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}.firebaseio.com` // Optional: If you use Realtime Database
+      });
+      console.log('Firebase Admin SDK initialized successfully.');
+    } catch (error) {
+      console.error('Firebase Admin SDK initialization error:', error);
+      // Depending on your error handling strategy, you might want to re-throw the error
+      // or ensure the function cannot proceed without Firebase if it's critical.
+      throw new Error('Failed to initialize Firebase Admin SDK.');
+    }
+  } else {
+    console.warn('One or more Firebase Admin SDK environment variables are missing. SDK not initialized.');
+    // throw new Error('Missing Firebase Admin SDK environment variables.'); // Or handle as a non-fatal issue if applicable
   }
 }
 
