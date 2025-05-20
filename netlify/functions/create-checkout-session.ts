@@ -215,7 +215,9 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext): P
       success_url: successUrl,
       cancel_url: cancelUrl,
       customer: stripeCustomerId, // Link the session to the Stripe Customer
-      metadata: undefined, // Explicitly ensure metadata is not sent for the session
+      metadata: {
+        firebaseUid: userId, // Pass the Firebase UID from decoded token
+      },
       // Automatically collect tax if configured in Stripe Tax settings
       // automatic_tax: { enabled: true }, // Temporarily commented out for testing
       // Allow promotion codes if you have them set up in Stripe

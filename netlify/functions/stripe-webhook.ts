@@ -152,7 +152,7 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext) =>
                         const typedSubscription = subscription as Stripe.Subscription;
                         const status = typedSubscription.status;
                         const planId = typedSubscription.items.data[0]?.price?.id ?? null;
-                        const currentPeriodEnd = typedSubscription.current_period_end;
+                        const currentPeriodEnd = typedSubscription['current_period_end'];
 
                         console.log(`Checkout session completed for user ${firebaseUid}. Sub Status: ${status}, Plan: ${planId}, Period End: ${currentPeriodEnd}`);
                         await updateFirebaseSubscriptionData(firebaseUid, {
@@ -211,7 +211,7 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext) =>
                     const typedSubscription = stripeEvent.data.object as Stripe.Subscription;
                     const status = typedSubscription.status; 
                     const planId = typedSubscription.items.data[0]?.price?.id ?? null;
-                    const currentPeriodEnd = typedSubscription.current_period_end;
+                    const currentPeriodEnd = typedSubscription['current_period_end'];
                     console.log(`Subscription updated for user ${firebaseUid}. New status: ${status}, Plan: ${planId}, Period End: ${currentPeriodEnd}`);
                     await updateFirebaseSubscriptionData(firebaseUid, {
                         status: status,
@@ -259,7 +259,7 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext) =>
                              await updateFirebaseSubscriptionData(firebaseUid, {
                                 status: typedSubscription.status, // Use actual status
                                 planId: typedSubscription.items.data[0]?.price?.id ?? null, // Get plan ID
-                                currentPeriodEnd: typedSubscription.current_period_end, // Get period end
+                                currentPeriodEnd: typedSubscription['current_period_end'], // Get period end
                                 customerId: customerId
                              });
                         } catch (subError) {

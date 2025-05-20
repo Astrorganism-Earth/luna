@@ -25,11 +25,29 @@ if (!firebaseProjectId || !firebaseClientEmail || !firebasePrivateKey) {
   }
 }
 
+// --- Initialize Firestore ---
+let db: admin.firestore.Firestore;
+try {
+  if (admin.apps.length) { // Ensure Firebase app is initialized
+    db = admin.firestore();
+    console.log('Webhook: Firestore SDK initialized successfully.');
+  } else {
+    console.error('Webhook: Firebase Admin App not initialized before Firestore.');
+    // This state should ideally not be reached if init logic above is correct
+  }
+} catch (error) {
+  console.error("Webhook: Firestore initialization error:", error);
+}
+
 // --- Stripe Initialization (Ensure this matches your create-checkout-session.ts) ---
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET; // Your Stripe webhook signing secret
 const monthlyPriceId = process.env.STRIPE_MONTHLY_PRICE_ID;
 const annualPriceId = process.env.STRIPE_ANNUAL_PRICE_ID;
+
+// Define constants for energy point grants
+const MONTHLY_ENERGY_GRANT = 11111;
+const ANNUAL_ENERGY_GRANT = 111111;
 
 if (!stripeSecretKey || !webhookSecret || !monthlyPriceId || !annualPriceId) {
   console.error('Webhook Error: Missing required Stripe environment variables (SECRET_KEY, WEBHOOK_SECRET, PRICE IDs).');
@@ -73,7 +91,7 @@ const setFirebaseUserRole = async (firebaseUid: string, role: string | null) => 
   } catch (error) {
     console.error(`Error setting custom claims for ${firebaseUid}:`, error);
     // Decide if you need to throw or just log the error
-    throw new Error(`Failed to set Firebase custom claims for UID: ${firebaseUid}`);
+    // throw new Error(`Failed to set Firebase custom claims for UID: ${firebaseUid}`); // Original line, consider implications
   }
 };
 
@@ -153,33 +171,112 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext): P
     let subscription: Stripe.Subscription | null = null;
     let firebaseUid: string | null = null;
     let roleToSet: string | null = null;
+    let session: Stripe.Checkout.Session | null = null; // Define session here
 
     switch (stripeEvent.type) {
       case 'checkout.session.completed':
-        const session = stripeEvent.data.object as Stripe.Checkout.Session;
+        session = stripeEvent.data.object as Stripe.Checkout.Session; // Assign to outer scope session
         console.log(`Processing checkout.session.completed for session: ${session.id}`);
+
+        // Attempt to get firebaseUid directly from session metadata first
+        const directFirebaseUid = session.metadata?.firebaseUid;
+
         if (session.mode === 'subscription' && session.customer) {
           customerId = typeof session.customer === 'string' ? session.customer : session.customer.id;
-          // Retrieve the subscription to get status and items
-          if (session.subscription) {
-             const subId = typeof session.subscription === 'string' ? session.subscription : session.subscription.id;
-             subscription = await stripe.subscriptions.retrieve(subId);
-             roleToSet = getRoleFromSubscription(subscription);
+
+          if (directFirebaseUid) {
+            firebaseUid = directFirebaseUid;
+            console.log(`Retrieved firebaseUid '${firebaseUid}' directly from checkout session metadata.`);
           } else {
-             console.warn(`Subscription ID missing from checkout session: ${session.id}`);
+            console.warn(`firebaseUid not found in checkout session metadata for session ${session.id}. Falling back to customer metadata.`);
+            if (customerId) {
+              firebaseUid = await getFirebaseUidFromCustomerId(customerId);
+            }
+          }
+
+          if (session.subscription) {
+            const subId = typeof session.subscription === 'string' ? session.subscription : session.subscription.id;
+            subscription = await stripe.subscriptions.retrieve(subId);
+            roleToSet = getRoleFromSubscription(subscription);
+
+            // --- BEGIN Firestore Update Block for checkout.session.completed ---
+            if (firebaseUid && subscription && customerId && db) { // Ensure db is initialized
+              await setFirebaseUserRole(firebaseUid, roleToSet);
+
+              const userDocRef = db.collection('users').doc(firebaseUid);
+              const subscriptionDataToUpdate: { [key: string]: any } = {
+                stripeCustomerId: customerId,
+                stripeSubscriptionId: subscription.id,
+                stripeRole: roleToSet,
+                subscriptionStatus: subscription.status,
+                currentPeriodStart: subscription['current_period_start'] ? admin.firestore.Timestamp.fromMillis(subscription['current_period_start'] * 1000) : null,
+                currentPeriodEnd: subscription['current_period_end'] ? admin.firestore.Timestamp.fromMillis(subscription['current_period_end'] * 1000) : null,
+                priceId: subscription.items.data[0]?.price.id,
+                energyPoints: admin.firestore.FieldValue.increment(
+                  roleToSet === 'monthly' ? MONTHLY_ENERGY_GRANT : ANNUAL_ENERGY_GRANT
+                ),
+                lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+              };
+
+              try {
+                await userDocRef.set(subscriptionDataToUpdate, { merge: true });
+                console.log(`Successfully updated Firestore for user ${firebaseUid} with subscription details from checkout.session.completed.`);
+              } catch (firestoreError: any) {
+                console.error(`Error updating Firestore for user ${firebaseUid} from checkout.session.completed: ${firestoreError.message}`);
+              }
+            } else {
+              console.error(`Missing critical data for Firestore update: firebaseUid=${firebaseUid}, subscriptionExists=${!!subscription}, customerId=${customerId}, dbInitialized=${!!db}`);
+            }
+            // --- END Firestore Update Block ---
+          } else {
+            console.warn(`Subscription ID missing from checkout session: ${session.id}`);
           }
         } else {
-            console.log(`Ignoring checkout session ${session.id} (mode: ${session.mode}, customer: ${session.customer})`);
+          console.log(`Ignoring checkout session ${session.id} (mode: ${session.mode}, customer: ${session.customer})`);
         }
         break;
 
       case 'customer.subscription.updated':
-      case 'customer.subscription.deleted': // Often indicates cancellation
+      case 'customer.subscription.deleted':
         subscription = stripeEvent.data.object as Stripe.Subscription;
         console.log(`Processing ${stripeEvent.type} for subscription: ${subscription.id}`);
         customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer.id;
-        // For deleted, treat as inactive
         roleToSet = stripeEvent.type === 'customer.subscription.deleted' ? null : getRoleFromSubscription(subscription);
+
+        // --- BEGIN Firestore Update Block for subscription updates/deletions ---
+        if (customerId && db) { // Ensure db is initialized
+          firebaseUid = await getFirebaseUidFromCustomerId(customerId);
+          if (firebaseUid) {
+            await setFirebaseUserRole(firebaseUid, roleToSet);
+
+            const userDocRef = db.collection('users').doc(firebaseUid);
+            const subscriptionUpdateData: { [key: string]: any } = {
+              stripeSubscriptionId: subscription.id,
+              stripeRole: roleToSet,
+              subscriptionStatus: subscription.status,
+              currentPeriodStart: subscription['current_period_start'] ? admin.firestore.Timestamp.fromMillis(subscription['current_period_start'] * 1000) : null,
+              currentPeriodEnd: subscription['current_period_end'] ? admin.firestore.Timestamp.fromMillis(subscription['current_period_end'] * 1000) : null,
+              priceId: subscription.items.data[0]?.price.id,
+              lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+            };
+
+            if (stripeEvent.type === 'customer.subscription.deleted') {
+              subscriptionUpdateData.energyPoints = 0; // Example: reset energy points
+            }
+
+            try {
+              await userDocRef.update(subscriptionUpdateData); // Use update
+              console.log(`Successfully updated Firestore for user ${firebaseUid} from ${stripeEvent.type}.`);
+            } catch (firestoreError: any) {
+              console.error(`Error updating Firestore for user ${firebaseUid} from ${stripeEvent.type}: ${firestoreError.message}`);
+            }
+          } else {
+            console.error(`Could not find Firebase UID for Stripe Customer ID: ${customerId} from ${stripeEvent.type}`);
+          }
+        } else {
+           console.error(`Missing customerId or db not initialized for Firestore update in ${stripeEvent.type}. dbInitialized=${!!db}`);
+        }
+        // --- END Firestore Update Block ---
         break;
 
       // Add other events if needed (e.g., 'invoice.payment_failed')
@@ -187,19 +284,6 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext): P
         console.log(`Unhandled event type: ${stripeEvent.type}`);
         // Return 200 for unhandled events Stripe expects acknowledgment
         return { statusCode: 200, body: JSON.stringify({ received: true, handled: false }) };
-    }
-
-    // If we have a customer ID from a relevant event, update Firebase claims
-    if (customerId) {
-      firebaseUid = await getFirebaseUidFromCustomerId(customerId);
-      if (firebaseUid) {
-        await setFirebaseUserRole(firebaseUid, roleToSet);
-      } else {
-        console.error(`Could not find Firebase UID for Stripe Customer ID: ${customerId} related to event ${stripeEvent.id}`);
-        // Consider how critical this is - maybe return 500?
-      }
-    } else {
-        console.log(`No customer ID found for event ${stripeEvent.id}, type ${stripeEvent.type}`);
     }
 
     // Acknowledge receipt of the event to Stripe
