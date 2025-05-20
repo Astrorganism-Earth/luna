@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect, Fragment } from 'react';
 import styled from 'styled-components';
 import { sendMessageToLuna } from '../services/chatService'; 
-import { auth, getChatHistory, onUserDataUpdate } from '../services/firebase'; 
-import { onAuthStateChanged, User } from 'firebase/auth'; 
+import { getChatHistory } from '../services/firebase'; 
+import { useAuthSubscription } from '../context/AuthSubscriptionContext'; 
 
 // Define the structure for a chat message
 interface ChatMessage {
@@ -161,84 +161,45 @@ const parseAndRenderMessage = (text: string): React.ReactNode[] => {
 };
 
 const ChatPage: React.FC = () => {
+  const { currentUser, firestoreUserData, stripeRole, loading: authLoading } = useAuthSubscription();
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false); 
-  const [isHistoryLoading, setIsHistoryLoading] = useState(true); 
+  const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [currentUser, setCurrentUser] = useState<User | null>(null); 
-  const [energyBalance, setEnergyBalance] = useState<number | null>(null); 
-  const messageAreaRef = useRef<HTMLDivElement>(null); 
+  const messageAreaRef = useRef<HTMLDivElement>(null);
 
-  // Effect to listen for auth changes, load history, and listen for user data
+  // Effect for auth state and initial setup (now simplified by context)
   useEffect(() => {
-    let unsubscribeUserData: (() => void) | null = null; 
-
-    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
-      setCurrentUser(user);
-
-      // Clean up previous user data listener if exists
-      if (unsubscribeUserData) {
-          unsubscribeUserData();
-          unsubscribeUserData = null;
-          setEnergyBalance(null); 
-      }
-
-      if (user) {
-        console.log("User logged in, fetching chat history and setting up user data listener for:", user.uid);
-        setIsHistoryLoading(true);
-        setError(null);
-
-        // Setup listener for user data (energy balance, etc.)
-        unsubscribeUserData = onUserDataUpdate(user.uid, (userData) => {
-            if (userData) {
-                console.log("ChatPage: Received user data update:", userData);
-                if (typeof userData.energyBalance === 'number') {
-                    setEnergyBalance(userData.energyBalance);
-                } else {
-                    console.warn("ChatPage: User data snapshot received without a valid number for energyBalance. Current state preserved.");
-                }
-            } else {
-                console.log("ChatPage: User data listener received null (user logged out or deleted?)");
-                setEnergyBalance(null); 
-            }
-        });
-
-        try {
-          const historyData = await getChatHistory(user.uid);
-          const mappedHistory: ChatMessage[] = historyData.map(doc => ({
+    if (!authLoading && currentUser) {
+      setIsHistoryLoading(true);
+      setError(null);
+      getChatHistory(currentUser.uid)
+        .then(history => {
+          // Map Firestore history to ChatMessage interface
+          const mappedHistory: ChatMessage[] = history.map((doc: any) => ({ // Assuming doc has id, role, content
             id: doc.id, 
-            sender: doc.role === 'assistant' ? 'luna' : 'user', 
+            sender: doc.role === 'assistant' ? 'luna' : (doc.role === 'system' ? 'system' : 'user'), 
             text: doc.content,
           }));
           setMessages(mappedHistory);
-          console.log(`Successfully loaded ${mappedHistory.length} messages from history.`);
-        } catch (err) {
-          console.error("Error fetching chat history:", err);
-          setError('Failed to load chat history. Please refresh the page.');
-          setMessages([]); 
-        } finally {
           setIsHistoryLoading(false);
-        }
-      } else {
-        console.log("User logged out, clearing chat history and balance.");
-        setMessages([]); 
-        setIsHistoryLoading(false);
-        setError(null);
-        setEnergyBalance(null); 
-      }
-    });
+        })
+        .catch(err => {
+          console.error("ChatPage Error fetching chat history:", err);
+          setError('Failed to load chat history. Please refresh the page.');
+          setIsHistoryLoading(false);
+        });
+    } else if (!authLoading && !currentUser) {
+      // User is logged out or not yet loaded
+      setMessages([]);
+      setIsHistoryLoading(false); // Not loading if no user
+      setError(null); // Clear error on logout
+    }
+  }, [currentUser, authLoading]);
 
-    // Cleanup auth subscription and user data subscription on unmount
-    return () => {
-        unsubscribeAuth();
-        if (unsubscribeUserData) {
-            unsubscribeUserData();
-        }
-    };
-  }, []); 
-
-  // Scroll to bottom whenever messages change
+  // Scroll to bottom when messages change
   useEffect(() => {
       if (messageAreaRef.current) {
           messageAreaRef.current.scrollTop = messageAreaRef.current.scrollHeight;
@@ -316,10 +277,10 @@ const ChatPage: React.FC = () => {
   return (
       <ChatContainer>
           <h1>Chat with Luna</h1>
-          {/* Display Energy Balance if user is logged in and balance is available */}
-          {currentUser && energyBalance !== null && (
+          {/* Display Energy Balance if user is logged in and firestoreUserData is available */}
+          {!authLoading && currentUser && firestoreUserData && firestoreUserData.energyPoints !== undefined && (
             <EnergyBalanceDisplay>
-                Energy: {energyBalance.toFixed(0)}
+                Energy: {firestoreUserData.energyPoints.toFixed(0)}
             </EnergyBalanceDisplay>
           )}
           <MessageArea ref={messageAreaRef}>
@@ -346,11 +307,11 @@ const ChatPage: React.FC = () => {
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyPress={handleKeyPress}
                   placeholder="Type your message..."
-                  disabled={isLoading || isHistoryLoading || !currentUser} 
+                  disabled={isLoading || isHistoryLoading || !currentUser || authLoading} 
               />
               <SendButton
                   onClick={handleSendMessage}
-                  disabled={isLoading || isHistoryLoading || !inputValue.trim() || !currentUser} 
+                  disabled={isLoading || isHistoryLoading || !inputValue.trim() || !currentUser || authLoading} 
               >
                   Send
               </SendButton>

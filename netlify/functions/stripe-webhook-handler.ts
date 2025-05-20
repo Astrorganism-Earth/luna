@@ -218,11 +218,16 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext): P
                 lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
               };
 
+              // Log the data being sent to Firestore
+              console.log(`Attempting to update Firestore for UID: ${firebaseUid} with data:`, JSON.stringify(subscriptionDataToUpdate, null, 2));
+
               try {
                 await userDocRef.set(subscriptionDataToUpdate, { merge: true });
                 console.log(`Successfully updated Firestore for user ${firebaseUid} with subscription details from checkout.session.completed.`);
               } catch (firestoreError: any) {
-                console.error(`Error updating Firestore for user ${firebaseUid} from checkout.session.completed: ${firestoreError.message}`);
+                console.error(`Error updating Firestore for user ${firebaseUid} from checkout.session.completed: ${firestoreError.message}`, firestoreError);
+                // Log the data that failed to write for easier debugging
+                console.error(`Failed Firestore data for UID ${firebaseUid}:`, JSON.stringify(subscriptionDataToUpdate, null, 2));
               }
             } else {
               console.error(`Missing critical data for Firestore update: firebaseUid=${firebaseUid}, subscriptionExists=${!!subscription}, customerId=${customerId}, dbInitialized=${!!db}`);

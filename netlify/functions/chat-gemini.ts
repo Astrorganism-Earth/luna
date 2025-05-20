@@ -127,9 +127,12 @@ export const handler: Handler = async (event: HandlerEvent, context: HandlerCont
     const userDoc = await userDocRef.get();
 
     if (!userDoc.exists) {
-        console.error(`Chat Function: User ${userId} not found.`);
-        return { statusCode: 404, body: JSON.stringify({ error: 'User not found.' }) };
+        console.error(`Chat Function: User document ${userId} not found.`);
+        return { statusCode: 404, body: JSON.stringify({ error: 'User not found', details: 'User profile does not exist.' }) };
     }
+
+    const currentEnergyPoints = userDoc.data()?.energyPoints ?? 0;
+    console.log(`User ${userId} current energy points: ${currentEnergyPoints}`);
 
     // 4. Prepare History for Gemini API (Now includes the just-saved user message)
     const historySnapshot = await chatCollectionRef.orderBy('timestamp', 'asc').get();
@@ -171,17 +174,17 @@ export const handler: Handler = async (event: HandlerEvent, context: HandlerCont
     const maxPotentialEnergyCost = Math.ceil(maxPotentialTotalCostUsd * ENERGY_COST_MULTIPLIER);
 
     console.log(`Max potential cost - USD: ${maxPotentialTotalCostUsd.toFixed(6)}, Energy: ${maxPotentialEnergyCost}`);
-    console.log(`User current energy balance: ${userDoc.data()?.energyBalance ?? 0}`);
+    console.log(`User current energy points: ${currentEnergyPoints}`);
 
     // Check if potential cost exceeds balance
-    if (maxPotentialEnergyCost > (userDoc.data()?.energyBalance ?? 0)) {
-        console.warn(`User ${userId} has insufficient balance for potential cost. Aborting call.`);
+    if (maxPotentialEnergyCost > currentEnergyPoints) {
+        console.warn(`User ${userId} has insufficient energy points. Current: ${currentEnergyPoints}, Estimated Cost: ${maxPotentialEnergyCost}`);
         return {
             statusCode: 402, // Payment Required
             body: JSON.stringify({
                 error: 'Insufficient energy balance.',
-                details: `Your current balance is ${userDoc.data()?.energyBalance}, but this message could cost up to ${maxPotentialEnergyCost} energy points. Please recharge.`,
-                currentBalance: userDoc.data()?.energyBalance,
+                details: `Your current energy points (${currentEnergyPoints}) is less than the estimated cost (${maxPotentialEnergyCost}) for this message. Please recharge.`,
+                currentBalance: currentEnergyPoints,
                 estimatedCost: maxPotentialEnergyCost
             })
         };
@@ -235,18 +238,18 @@ export const handler: Handler = async (event: HandlerEvent, context: HandlerCont
     console.log(`Actual cost - USD: ${costUsd.toFixed(6)}, Energy: ${energyCost}`);
 
     // Deduct cost and update balance
-    const newEnergyBalance = (userDoc.data()?.energyBalance ?? 0) - energyCost;
-    console.log(`Updating user ${userId} balance: ${(userDoc.data()?.energyBalance ?? 0)} -> ${newEnergyBalance}`);
+    const newEnergyPoints = currentEnergyPoints - energyCost;
+    console.log(`Updating user ${userId} points: ${currentEnergyPoints} -> ${newEnergyPoints}`);
 
     // Final check for negative balance after actual cost calculation
-    if (newEnergyBalance < 0) {
-        console.error(`User ${userId} balance went negative (${newEnergyBalance}) unexpectedly after API call. Cost: ${energyCost}, Start Balance: ${(userDoc.data()?.energyBalance ?? 0)}. Aborting Firestore update.`);
+    if (newEnergyPoints < 0) {
+        console.error(`User ${userId} points went negative (${newEnergyPoints}) unexpectedly after API call. Cost: ${energyCost}, Start Balance: ${currentEnergyPoints}. Aborting Firestore update.`);
         // Return an error instead of committing a negative balance
          return {
             statusCode: 500, // Internal Server Error due to calculation discrepancy
             body: JSON.stringify({
                 error: 'Internal error: Balance calculation resulted in negative value.',
-                details: `Could not complete request due to balance calculation error. Current Balance: ${(userDoc.data()?.energyBalance ?? 0)}. Cost: ${energyCost}. Please contact support.`,
+                details: `Could not complete request due to balance calculation error. Current Balance: ${currentEnergyPoints}. Cost: ${energyCost}. Please contact support.`,
                 // Optionally return Luna's generated text but indicate the state wasn't saved
                 reply: geminiResponseText, // Send reply, but warn user state wasn't saved
                 state_saved: false
@@ -266,16 +269,16 @@ export const handler: Handler = async (event: HandlerEvent, context: HandlerCont
         energyCost: energyCost // Store the actual calculated energy cost
     });
 
-    batch.update(userDocRef, { energyBalance: newEnergyBalance }); // Update with the final, positive balance
+    batch.update(userDocRef, { energyPoints: newEnergyPoints }); // Update with the final, positive balance
     await batch.commit();
-    console.log(`User ${userId} energy balance updated to ${newEnergyBalance}. Batch committed.`);
+    console.log(`User ${userId} energy points updated to ${newEnergyPoints}. Batch committed.`);
 
     // Return success response
     return {
         statusCode: 200,
         body: JSON.stringify({
             reply: geminiResponseText,
-            updatedEnergyBalance: newEnergyBalance,
+            updatedEnergyPoints: newEnergyPoints,
             usage: {
                 inputTokens,
                 outputTokens,
